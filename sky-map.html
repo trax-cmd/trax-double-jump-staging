@@ -1,0 +1,210 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, maximum-scale=1, user-scalable=no">
+<title>The Sky Map</title>
+<link rel="icon" href="data:,">
+<style>
+  :root { --bg: #070a16; --ink: #dfe7ff; --dim: rgba(223,231,255,0.55); --panel: rgba(10,14,30,0.92); --line: rgba(120,140,190,0.5); --plan: #7fe3ff; }
+  html, body { margin: 0; height: 100%; background: var(--bg); color: var(--ink); font: 13px/1.35 'Courier New', Courier, monospace; overflow: hidden; }
+  canvas { display: block; position: absolute; inset: 0; touch-action: none; cursor: grab; }
+  canvas.drag { cursor: grabbing; }
+  .panel { position: absolute; left: 12px; top: 12px; width: 330px; max-height: calc(100% - 24px); overflow: auto; background: var(--panel); border: 1px solid var(--line); border-radius: 8px; padding: 12px 14px; z-index: 2; }
+  .panel h1 { font-size: 15px; margin: 0 0 2px; letter-spacing: 0.04em; color: #ffd27b; }
+  .panel .sub { color: var(--dim); font-size: 11px; margin-bottom: 8px; }
+  .row { display: flex; flex-wrap: wrap; gap: 6px; margin: 6px 0; }
+  button { font: inherit; font-weight: 700; font-size: 11px; letter-spacing: 0.04em; color: var(--ink); background: rgba(40,50,90,0.6); border: 1px solid var(--line); border-radius: 5px; padding: 4px 8px; cursor: pointer; }
+  button.on { background: #ffd27b; color: #1a1400; border-color: #ffd27b; }
+  button:focus-visible { outline: 2px solid var(--plan); }
+  label.ck { display: inline-flex; align-items: center; gap: 4px; font-size: 11px; color: var(--ink); cursor: pointer; padding: 2px 5px; border: 1px solid transparent; border-radius: 4px; }
+  label.ck input { margin: 0; }
+  .sw { display: inline-block; width: 9px; height: 9px; border-radius: 50%; }
+  .list { margin-top: 8px; border-top: 1px solid var(--line); padding-top: 6px; }
+  .list h2 { font-size: 11px; color: var(--plan); margin: 6px 0 4px; letter-spacing: 0.06em; }
+  .f { display: flex; justify-content: space-between; gap: 8px; padding: 3px 4px; border-radius: 4px; cursor: pointer; font-size: 11px; }
+  .f:hover, .f.on { background: rgba(127,227,255,0.14); }
+  .f b { color: var(--plan); font-weight: 700; }
+  .f span { color: var(--dim); white-space: nowrap; }
+  .ring { color: var(--dim); font-size: 10px; margin-top: 6px; letter-spacing: 0.08em; }
+  #card { position: absolute; z-index: 3; pointer-events: none; max-width: 340px; background: var(--panel); border: 1px solid var(--line); border-radius: 8px; padding: 10px 12px; display: none; font-size: 12px; }
+  #card b { color: #ffd27b; font-size: 13px; display: block; margin-bottom: 3px; }
+  #card .plan b { color: var(--plan); }
+  #card .k { color: var(--dim); }
+  #card p { margin: 4px 0 0; }
+  .hint { position: absolute; right: 12px; bottom: 10px; color: var(--dim); font-size: 11px; z-index: 2; background: var(--panel); padding: 5px 9px; border-radius: 6px; border: 1px solid var(--line); }
+  #fold { display: none; float: right; margin: -2px 0 0 8px; }
+  @media (max-width: 720px) { .panel { width: calc(100% - 24px); max-height: 60%; font-size: 12px; padding: 8px 10px; } .hint { display: none; } #fold { display: inline-block; } .panel.folded > :not(h1):not(#fold) { display: none; } .panel.folded { max-height: none; } .panel h1 { font-size: 13px; } }
+</style>
+</head>
+<body>
+<canvas id="c"></canvas>
+<div class="panel" id="panel">
+  <button id="fold" type="button">MENU</button>
+  <h1 id="title">THE SKY MAP</h1>
+  <div class="sub" id="sub"></div>
+  <div class="row" id="modes"></div>
+  <div class="row" id="zoom"></div>
+  <div class="row" id="layers"></div>
+  <div class="list" id="list"></div>
+</div>
+<div id="card"></div>
+<div class="hint">wheel or pinch to zoom &middot; drag to pan &middot; hover anything for its card &middot; click a formation in the list to fly to it</div>
+<script src="sky-map-data.js"></script>
+<script>
+(() => {
+  'use strict';
+  const S = window.SKY; if (!S) { document.body.textContent = 'no sky-map-data.js - run node tools/sky-map.js'; return; }
+  const D2R = Math.PI / 180, ALT0 = S.ALT0, C = S.consts;
+  const cv = document.getElementById('c'), g = cv.getContext('2d'), card = document.getElementById('card');
+  const pol = (r, th) => [r * Math.cos(th * D2R), ALT0 + r * Math.sin(th * D2R)];
+  const ringOf = (dx, alt) => { const r = Math.hypot(dx, alt - ALT0); for (let i = 0; i < 3; i++) if (r <= S.rings[i].r) return i + 1; return 4; };
+  const FAM = { pop: { col: '#ffe08a', name: 'POPCORN', mark: 'dot', sz: 0.8 }, drone: { col: '#ff9a4d', name: 'DRONES', mark: 'dot', sz: 1 }, plat: { col: '#e8eef7', name: 'PLATINUM', mark: 'sq', sz: 1 }, jetf: { col: '#ffd34d', name: 'JETS', mark: 'tri', sz: 1.1 }, lion: { col: '#ff6b4a', name: 'LIONS', mark: 'lion', sz: 1.5 }, machine: { col: '#ff7bd5', name: 'MACHINES', mark: 'dia', sz: 1.1 }, rabbi: { col: '#ffb347', name: 'RABBIS', mark: 'dot', sz: 1 }, grudge: { col: '#aaff8c', name: 'GRUDGES', mark: 'dot', sz: 0.9 }, jack: { col: '#c9a2ff', name: 'JACK BOYS', mark: 'dot', sz: 1 } };
+  const famWord = (rows) => { const t = {}; for (const [f, n] of rows) t[f] = (t[f] || 0) + n; return Object.keys(t).map((f) => t[f] + ' ' + (FAM[f] ? FAM[f].name : f.toUpperCase())).join(' · '); };
+  // ---------- THE PLAN: every body where it would stand ----------
+  function bodiesOf(F) {
+    const q = F.geo, out = [];
+    const put = (fam, p) => out.push({ fam: fam, dx: p[0], alt: p[1] });
+    const along = (fam, n, f) => { for (let i = 0; i < n; i++) put(fam, f(n === 1 ? 0.5 : i / (n - 1))); };
+    const tan = (th) => [-Math.sin(th * D2R), Math.cos(th * D2R)], rad = (th) => [Math.cos(th * D2R), Math.sin(th * D2R)];
+    switch (F.shape) {
+      case 'arc': { const th1 = q.th1 < q.th0 ? q.th1 + 360 : q.th1; F.rows.forEach(([fam, n], k) => along(fam, n, (t) => pol(q.r + k * q.gap, q.th0 + (th1 - q.th0) * t))); break; }   /* an arc through zero (352 to 10) runs the short way */
+      case 'serpent': { const th1 = q.th1 < q.th0 ? q.th1 + 360 : q.th1; F.rows.forEach(([fam, n], k) => along(fam, n, (t) => pol(q.r + k * q.gap + q.amp * Math.sin(t * q.waves * Math.PI * 2), q.th0 + (th1 - q.th0) * t))); break; }
+      case 'chevron': F.rows.forEach(([fam, n], k) => { const h = Math.ceil(n / 2); for (const e of q.ends) along(fam, h, (t) => pol(q.apex[0] + (e[0] - q.apex[0]) * t + k * q.gap, q.apex[1] + (e[1] - q.apex[1]) * t)); }); break;
+      case 'gate': for (const a of q.arcs) F.rows.forEach(([fam, n], k) => along(fam, n, (t) => pol(q.r + k * q.gap, a[0] + (a[1] - a[0]) * t))); if (q.mouth) { const m0 = q.arcs[0][1], m1 = q.arcs[1][0]; along(q.mouth[0], q.mouth[1], (t) => pol(q.r + q.gap * 0.5, m0 + (m1 - m0) * (0.15 + 0.7 * t))); } break;
+      case 'block': { const c = pol(q.c[0], q.c[1]), T = tan(q.c[1]), R = rad(q.c[1]); F.rows.forEach(([fam, n], k) => { for (let i = 0; i < n; i++) { const u = (i - (n - 1) / 2) * q.sx, v = k * q.sy; put(fam, [c[0] + T[0] * u + R[0] * v, c[1] + T[1] * u + R[1] * v]); } }); break; }
+      case 'spiral': { const c = pol(q.c[0], q.c[1]); F.rows.forEach(([fam, n]) => along(fam, n, (t) => { const a = t * q.turns * Math.PI * 2, rr = q.r0 + (q.r1 - q.r0) * t; return [c[0] + rr * Math.cos(a), c[1] + rr * Math.sin(a)]; })); break; }
+      case 'x': { const c = pol(q.c[0], q.c[1]), T = tan(q.c[1]), R = rad(q.c[1]), [f0, n0] = F.rows[0], h = Math.ceil(n0 / 2); along(f0, h, (t) => [c[0] + T[0] * q.len * (t - 0.5), c[1] + T[1] * q.len * (t - 0.5)]); along(f0, n0 - h, (t) => [c[0] + R[0] * q.len * (t - 0.5), c[1] + R[1] * q.len * (t - 0.5)]); if (F.rows[1]) { const [f1, n1] = F.rows[1]; along(f1, n1, (t) => [c[0] + T[0] * 420 * (t - 0.5) * (n1 - 1), c[1] + T[1] * 420 * (t - 0.5) * (n1 - 1)]); } break; }
+      case 'halo': { const c = pol(q.c[0], q.c[1]), tot = F.rows.reduce((a, r) => a + r[1], 0), left = F.rows.map((r) => r[1]); for (let i = 0; i < tot; i++) { let best = 0, bv = -1; F.rows.forEach((r, k) => { const v = left[k] / r[1]; if (left[k] > 0 && v > bv) { bv = v; best = k; } }); left[best]--; const a = i / tot * Math.PI * 2; put(F.rows[best][0], [c[0] + q.rad * Math.cos(a), c[1] + q.rad * Math.sin(a)]); } break; }
+      case 'spokes': for (const th of q.ths) F.rows.forEach(([fam, n], k) => { const off = (k - (F.rows.length - 1) / 2) * q.gap, T = tan(th); along(fam, n, (t) => { const p = pol(q.r0 + (q.r1 - q.r0) * t, th); return [p[0] + T[0] * off, p[1] + T[1] * off]; }); }); break;
+    }
+    return out;
+  }
+  const SEATED = S.forms || [], ROWS = SEATED.map((F) => Object.assign({ seated: true }, F)).concat((S.plan && S.plan.formations || []).filter((F) => !SEATED.some((q) => q.key === F.key)).map((F) => Object.assign({ seated: false }, F)));   /* (1843) the formations seated in the game first, then the plan's rows not yet in it */
+  const PLAN = ROWS.map((F) => { const b = bodiesOf(F); let x0 = 1e9, x1 = -1e9, y0 = 1e9, y1 = -1e9, cx = 0, cy = 0; for (const p of b) { x0 = Math.min(x0, p.dx); x1 = Math.max(x1, p.dx); y0 = Math.min(y0, p.alt); y1 = Math.max(y1, p.alt); cx += p.dx; cy += p.alt; } return Object.assign({}, F, { bodies: b, n: b.length, w: Math.round(x1 - x0), h: Math.round(y1 - y0), cx: cx / Math.max(1, b.length), cy: cy / Math.max(1, b.length), word: famWord(F.rows.concat(F.geo.mouth ? [F.geo.mouth] : [])) }); });
+  // ---------- THE VIEW ----------
+  const V = { s: 0.01, ox: 0, oy: 0, mode: 'both', hover: null, pin: null, layers: {} };
+  const LAYERS = [['forges', 'FORGES + PLACES', '#ff4d4d', true], ['swarms', 'GREAT SWARMS', '#ffffff', true], ['patrols', 'PATROL LANES', '#ff7b7b', true], ['rabbi', 'RABBI NESTS', '#ffb347', true], ['hunts', 'THE HUNTS', '#ff9a8c', true], ['fields', 'GRUDGE FIELDS + MINES', '#aaff8c', true], ['packs', 'MACHINE PACKS + CONVOY', '#ff7bd5', true], ['wings', 'JET WINGS', '#ffd34d', true], ['plats', 'PLATINUM + JACKS + SHELLS', '#e8eef7', true], ['dens', 'LAB DENS', '#c8a2ff', true], ['pepper', 'THE PEPPER (64 small packs)', '#ff9a8c', true], ['districts', 'DISTRICTS', '#9fb3d9', true], ['plan', 'THE FORMATION PLAN', '#7fe3ff', true]];
+  for (const l of LAYERS) V.layers[l[0]] = l[3];
+  const W = () => cv.width / devicePixelRatio, H = () => cv.height / devicePixelRatio;
+  const P = (dx, alt) => [V.ox + dx * V.s, V.oy - (alt - ALT0) * V.s];
+  const fit = () => { V.s = Math.min(W(), H()) * 0.46 / S.R_LIVE; V.ox = W() / 2 + (W() > 900 ? 120 : 0); V.oy = H() / 2; draw(); };
+  const flyTo = (dx, alt, s) => { V.s = s; V.ox = W() / 2 + (W() > 900 ? 120 : 0) - dx * s; V.oy = H() / 2 + (alt - ALT0) * s; draw(); };
+  function resize() { if (innerWidth <= 720 && !V.userFold) document.getElementById('panel').classList.add('folded'); cv.width = Math.round(innerWidth * devicePixelRatio); cv.height = Math.round(innerHeight * devicePixelRatio); cv.style.width = innerWidth + 'px'; cv.style.height = innerHeight + 'px'; fit(); }
+  // ---------- DRAWING ----------
+  let hits = [];
+  const label = (t, x, y, col, size, align, weight) => { g.font = (weight || '700') + ' ' + (size || 12) + "px 'Courier New', monospace"; g.textAlign = align || 'center'; g.textBaseline = 'middle'; g.lineWidth = 3.5; g.strokeStyle = 'rgba(5,7,18,0.9)'; g.lineJoin = 'round'; g.strokeText(t, x, y); g.fillStyle = col; g.fillText(t, x, y); };
+  const mark = (kind, x, y, r, col) => { g.fillStyle = col; g.beginPath(); if (kind === 'sq') g.rect(x - r, y - r, r * 2, r * 2); else if (kind === 'tri') { g.moveTo(x, y - r * 1.2); g.lineTo(x + r * 1.1, y + r * 0.9); g.lineTo(x - r * 1.1, y + r * 0.9); g.closePath(); } else if (kind === 'dia') { g.moveTo(x, y - r * 1.3); g.lineTo(x + r, y); g.lineTo(x, y + r * 1.3); g.lineTo(x - r, y); g.closePath(); } else g.arc(x, y, r, 0, Math.PI * 2); g.fill(); if (kind === 'lion') { g.fillStyle = 'rgba(40,10,0,0.9)'; g.beginPath(); g.arc(x, y, r * 0.42, 0, Math.PI * 2); g.fill(); } };
+  const hit = (x, y, r, item, seg) => hits.push({ x: x, y: y, r: r, item: item, seg: seg || null });
+  const dimNow = () => V.mode === 'plan' ? 0.28 : 1;
+  const big = () => V.s >= 0.016, huge = () => V.s >= 0.04, tiny = () => V.s < 0.006;   /* three readings: a phone's fit shows shapes only; a desk's fit names the big things; one zoom in names everything */
+  function draw() {
+    const w = W(), h = H(), s = V.s; hits = [];
+    g.setTransform(devicePixelRatio, 0, 0, devicePixelRatio, 0, 0); g.clearRect(0, 0, w, h);
+    g.fillStyle = '#070a16'; g.fillRect(0, 0, w, h);
+    const [cx, cy] = P(0, ALT0);
+    // the districts past ring 1
+    if (V.layers.districts) for (const d of S.districts) { g.beginPath(); g.arc(cx, cy, S.R_LIVE * s, -d.th0 * D2R, -d.th1 * D2R, true); g.arc(cx, cy, S.rings[0].r * s, -d.th1 * D2R, -d.th0 * D2R, false); g.closePath(); g.fillStyle = 'rgba(' + d.tint.join(',') + ',0.06)'; g.fill(); const m = (d.th0 + d.th1) / 2, t = P(...pol(S.R_LIVE * 0.9, m)); label(d.name, t[0], t[1], 'rgba(' + d.tint.join(',') + ',0.75)', 13); }
+    // the rings
+    g.lineWidth = 1.2; for (let i = 0; i < 4; i++) { const q = S.rings[i]; g.strokeStyle = 'rgba(' + q.tint.join(',') + ',0.45)'; g.setLineDash(i === 3 ? [6, 6] : []); g.beginPath(); g.arc(cx, cy, q.r * s, 0, Math.PI * 2); g.stroke(); g.setLineDash([]); label('RING ' + (i + 1) + ' · ' + q.name + ' · ' + (q.r / 1000) + 'k', cx + 8, cy - q.r * s + 12, 'rgba(' + q.tint.join(',') + ',0.9)', 12, 'left'); }
+    // the Earth and the station
+    g.fillStyle = '#2d63c9'; g.beginPath(); g.arc(cx, cy, Math.max(4, S.EARTH_R * s), 0, Math.PI * 2); g.fill();
+    g.fillStyle = '#ffe9a8'; g.beginPath(); for (let k = 0; k < 10; k++) { const a = -Math.PI / 2 + k * Math.PI / 5, rr = k % 2 ? 4 : 10; g.lineTo(cx + Math.cos(a) * rr, cy + Math.sin(a) * rr); } g.closePath(); g.fill();
+    if (!tiny()) label('THE SCHMOOPY STATION', cx, cy + 18, '#ffe9a8', 12); hit(cx, cy, 12, { kind: 'station' });
+    g.globalAlpha = dimNow();
+    // the great swarms: their cloud and the reach that wakes them
+    if (V.layers.swarms) for (const q of S.swarms) { const [x, y] = P(q.dx, q.alt); g.strokeStyle = 'rgba(255,255,255,0.18)'; g.lineWidth = 1; g.setLineDash([4, 6]); g.beginPath(); g.arc(x, y, C.SWARM_AWARE * s, 0, Math.PI * 2); g.stroke(); g.setLineDash([]); g.fillStyle = 'rgba(255,255,255,0.14)'; g.beginPath(); g.arc(x, y, Math.max(6, C.SWARM_R * s), 0, Math.PI * 2); g.fill(); g.strokeStyle = 'rgba(255,255,255,0.6)'; g.stroke(); if (!tiny()) label(q.name, x, y - Math.max(6, C.SWARM_R * s) - 9, '#ffffff', 12); if (big()) label(q.word, x, y + Math.max(6, C.SWARM_R * s) + 9, 'rgba(255,255,255,0.75)', 11); hit(x, y, Math.max(8, C.SWARM_R * s), { kind: 'swarm', q: q }); }
+    // the patrol lanes
+    if (V.layers.patrols) for (const q of S.patrols) { const a = P(q.dx - q.span / 2, q.alt), b = P(q.dx + q.span / 2, q.alt); g.strokeStyle = 'rgba(255,123,123,0.8)'; g.lineWidth = 2.5; g.setLineDash([8, 6]); g.beginPath(); g.moveTo(a[0], a[1]); g.lineTo(b[0], b[1]); g.stroke(); g.setLineDash([]); if (big()) label(q.name, (a[0] + b[0]) / 2, a[1] - 10, '#ff9a9a', 11); hit((a[0] + b[0]) / 2, a[1], 6, { kind: 'patrol', q: q }, [a[0], a[1], b[0], b[1]]); }
+    const N = S.nests;
+    // the moving nests: the loops, the arcs, the lane - and the body they carry, drawn where it starts
+    if (V.layers.packs) { for (const p of N.packs) { g.strokeStyle = 'rgba(255,123,213,0.5)'; g.lineWidth = 1.5; g.setLineDash([5, 5]); g.beginPath(); for (let k = 0; k <= 24; k++) { const th = p[4] + (p[5] - p[4]) * k / 24, t = P(...pol(p[2], th)); if (k) g.lineTo(t[0], t[1]); else g.moveTo(t[0], t[1]); } for (let k = 24; k >= 0; k--) { const th = p[4] + (p[5] - p[4]) * k / 24, t = P(...pol(p[3], th)); g.lineTo(t[0], t[1]); } g.closePath(); g.stroke(); g.setLineDash([]); const t = P(...pol(p[2], p[4])); g.fillStyle = 'rgba(255,123,213,0.55)'; g.beginPath(); g.arc(t[0], t[1], Math.max(5, C.PACK_R * s), 0, Math.PI * 2); g.fill(); const m = P(...pol((p[2] + p[3]) / 2, (p[4] + p[5]) / 2)); if (big()) label(p[1] + ' · ' + p[6], m[0], m[1], '#ff9fe0', 11); hit(t[0], t[1], Math.max(8, C.PACK_R * s), { kind: 'pack', p: p }); }
+      { const c = N.convoy, a = P(...pol(c[0], c[2])), b = P(...pol(c[1], c[2])); g.strokeStyle = 'rgba(255,123,213,0.7)'; g.lineWidth = 2; g.setLineDash([5, 5]); g.beginPath(); g.moveTo(a[0], a[1]); g.lineTo(b[0], b[1]); g.stroke(); g.setLineDash([]); g.fillStyle = '#ff7bd5'; g.fillRect(a[0] - Math.max(3, 260 * s), a[1] - Math.max(3, c[3] / 2 * 170 * s), Math.max(6, 520 * s), Math.max(6, c[3] / 2 * 170 * s)); if (big()) label('THE CONVOY · ' + c[3], (a[0] + b[0]) / 2 + 10, (a[1] + b[1]) / 2, '#ff9fe0', 11, 'left'); hit(a[0], a[1], 10, { kind: 'convoy', c: c }); } }
+    if (V.layers.wings) for (const wg of N.wings) { g.strokeStyle = 'rgba(255,211,77,0.55)'; g.lineWidth = 1.5; g.setLineDash([6, 5]); g.beginPath(); for (let k = 0; k <= 24; k++) { const t = P(...pol(wg[2], wg[3] + (wg[4] - wg[3]) * k / 24)); if (k) g.lineTo(t[0], t[1]); else g.moveTo(t[0], t[1]); } g.stroke(); g.setLineDash([]); const a = P(...pol(wg[2], wg[3])), dep = Math.max(7, wg[5] / 2 * 150 * s), ht = Math.max(5, wg[5] / 2 * 60 * s); g.fillStyle = 'rgba(255,211,77,0.85)'; g.beginPath(); g.moveTo(a[0], a[1]); g.lineTo(a[0] - dep, a[1] - ht); g.lineTo(a[0] - dep, a[1] + ht); g.closePath(); g.fill(); const m = P(...pol(wg[2], (wg[3] + wg[4]) / 2)); if (big()) label(wg[1] + ' · ' + wg[5], m[0], m[1] - 10, '#ffe08a', 11); hit(a[0] - dep / 2, a[1], Math.max(9, dep / 2), { kind: 'wing', w: wg }); }
+    // the still nests, each at its real spread
+    const box = (dx, alt, bw, bh, col, item, min) => { const [x, y] = P(dx, alt), pw = Math.max(min || 5, bw * s), ph = Math.max(min || 5, bh * s); g.fillStyle = col; g.fillRect(x - pw / 2, y - ph / 2, pw, ph); hit(x, y, Math.max(pw, ph) / 2, item); return [x, y, pw, ph]; };
+    const disc = (dx, alt, rr, col, item, min) => { const [x, y] = P(dx, alt), r = Math.max(min || 4, rr * s); g.fillStyle = col; g.beginPath(); g.arc(x, y, r, 0, Math.PI * 2); g.fill(); hit(x, y, r, item); return [x, y, r]; };
+    if (V.layers.rabbi) { for (const r of N.rabbi) { const [x, y, rr] = disc(r[1], r[2], C.SEAT_R, 'rgba(255,179,71,0.85)', { kind: 'rabbi', r: r }); if (big()) label(r[0] + ' · ' + r[3] + (r[4] ? '+' + r[4] : ''), x, y - rr - 8, '#ffd98a', 11); } { const c = N.cantor, [x, y, rr] = disc(c[0], c[1], C.SEAT_R * 1.4, 'rgba(255,179,71,0.95)', { kind: 'cantor', c: c }, 6); label('THE CANTOR', x, y - rr - 8, '#ffd98a', 11); } }
+    if (V.layers.hunts) for (const hn of N.hunts) { const [x, y, rr] = disc(hn[1], hn[2], 1200, 'rgba(255,154,140,0.5)', { kind: 'hunt', h: hn }); g.strokeStyle = '#ff9a8c'; g.lineWidth = 1.5; g.beginPath(); g.arc(x, y, rr, 0, Math.PI * 2); g.stroke(); if (big()) label('THE HUNT · ' + hn[3] + ' LIONS', x, y - rr - 8, '#ffb3a8', 11); }
+    if (V.layers.fields) { for (const m of N.mines) { const [x, y, pw, ph] = box(m[1], m[2], 1400, 900, 'rgba(170,255,140,0.55)', { kind: 'mine', m: m }); if (big()) label('MINEFIELD · ' + m[3], x, y - ph / 2 - 8, '#c8ffb0', 11); } for (const f of N.fields) { const [x, y, pw, ph] = box(f[1], f[2], 1400, 900, 'rgba(170,255,140,0.4)', { kind: 'field', f: f }, 4); if (big()) label(f[0] + ' · ' + f[3], x, y - ph / 2 - 7, 'rgba(200,255,176,0.9)', 10); } }
+    if (V.layers.plats) { for (const p of N.plats) { const [x, y, pw, ph] = box(p[1], p[2], 1800, Math.ceil(p[3] / 10) * 160, 'rgba(232,238,247,0.85)', { kind: 'platf', p: p }); if (big()) label(p[0] + ' · ' + p[3] + ' PLATINUM', x, y - ph / 2 - 8, '#ffffff', 11); } for (const j of N.jacks) { const [x, y, pw, ph] = box(j[1], j[2], 1800, 400, 'rgba(201,162,255,0.8)', { kind: 'jackn', j: j }); if (big()) label(j[0] + ' · ' + j[3] + ' JACK BOYS', x, y - ph / 2 - 8, '#dcc8ff', 11); } for (const sh of N.shells) { const f = S.forges[+sh[0].slice(1) - 1]; if (!f) continue; const [x, y] = P(f.dx, f.alt); g.strokeStyle = 'rgba(232,238,247,0.8)'; g.lineWidth = 1.5; g.setLineDash([3, 3]); g.beginPath(); g.arc(x, y, Math.max(7, 1500 * s), 0, Math.PI * 2); g.stroke(); g.setLineDash([]); hit(x, y, Math.max(7, 1500 * s), { kind: 'shell', sh: sh, f: f }); } }
+    if (V.layers.dens) for (const d of S.dens) { const [x, y] = P(d.dx, d.alt); mark('dia', x, y, 5, '#c8a2ff'); if (big()) label(d.key + ' · ' + d.pop + ' LAB TRAXES', x, y - 11, '#dcc8ff', 10); hit(x, y, 6, { kind: 'den', d: d }); }
+    if (V.layers.pepper) for (const p of N.pepper) { const [x, y] = P(p[1], p[2]), lion = p[3] === 'lion'; mark(lion ? 'dot' : 'dia', x, y, 3, lion ? '#ff9a8c' : '#ff7bd5'); if (huge()) label(p[4] + (lion ? ' LIONS' : ' MACHINES'), x, y - 9, lion ? '#ffb3a8' : '#ff9fe0', 10); hit(x, y, 5, { kind: 'pepper', p: p }); }
+    g.globalAlpha = 1;
+    // the forges and the places, over everything seated
+    if (V.layers.forges) { for (const pl of S.places) { const [x, y] = P(pl.dx, pl.alt); g.fillStyle = 'rgba(127,211,255,0.9)'; g.beginPath(); g.arc(x, y, 4.5, 0, Math.PI * 2); g.fill(); if (!tiny()) label(pl.short, x, y + 14, '#a8dcff', 11); hit(x, y, 6, { kind: 'place', p: pl }); }
+      for (const f of S.forges) { const [x, y] = P(f.dx, f.alt), runner = S.runners && S.runners.indexOf(f.key) >= 0;
+        if (runner) {   /* (1842) a runaway flies its seat's ring around the Earth in one direction: the dashed lap and an arrow the way it goes */
+          const rr = Math.hypot(f.dx, f.alt - ALT0), ph = Math.atan2(f.alt - ALT0, f.dx), ring = ringOf(f.dx, f.alt), dir = (S.run && S.run.DIR) ? (S.run.DIR[ring - 1] || 1) : 1, tx = dir > 0 ? Math.sin(ph) : -Math.sin(ph), ty = dir > 0 ? -Math.cos(ph) : Math.cos(ph);
+          g.strokeStyle = 'rgba(255,77,77,0.35)'; g.lineWidth = 1; g.setLineDash([3, 7]); g.beginPath(); g.arc(cx, cy, rr * s, 0, Math.PI * 2); g.stroke(); g.setLineDash([]);
+          const [ax, ay] = P(f.dx + tx * 1400, f.alt + ty * 1400), ang = Math.atan2(ay - y, ax - x); g.fillStyle = 'rgba(255,120,120,0.9)'; g.beginPath(); g.moveTo(ax + Math.cos(ang) * 7, ay + Math.sin(ang) * 7); g.lineTo(ax + Math.cos(ang + 2.5) * 6, ay + Math.sin(ang + 2.5) * 6); g.lineTo(ax + Math.cos(ang - 2.5) * 6, ay + Math.sin(ang - 2.5) * 6); g.closePath(); g.fill();
+        }
+        g.fillStyle = '#ff4d4d'; g.beginPath(); g.moveTo(x, y - 7); g.lineTo(x + 5.5, y); g.lineTo(x, y + 7); g.lineTo(x - 5.5, y); g.closePath(); g.fill(); if (!tiny()) label(f.key + (runner ? ' · RUNS' : ''), x + 8, y - 6, '#ffd6d6', 11, 'left'); hit(x, y, 7, { kind: 'forge', f: f, runner: runner }); } }
+    // THE PLAN
+    if (V.layers.plan && V.mode !== 'now') for (const F of PLAN) {
+      const on = V.hover && V.hover.kind === 'plan' && V.hover.F === F || V.pin === F;
+      g.strokeStyle = F.seated ? (on ? 'rgba(127,227,255,0.9)' : 'rgba(127,227,255,0.35)') : (on ? 'rgba(255,123,213,0.9)' : 'rgba(255,123,213,0.5)'); g.lineWidth = on ? 2 : 1; g.setLineDash(F.seated ? [] : [4, 4]);
+      for (const b of F.bodies) { const [x, y] = P(b.dx, b.alt); b.sx = x; b.sy = y; }
+      // the rows' threads: a line through each row, broken where a row ends or the family changes
+      g.beginPath(); for (let j = 0; j < F.bodies.length; j++) { const b = F.bodies[j]; if (j === 0 || b.fam !== F.bodies[j - 1].fam || Math.hypot(b.sx - F.bodies[j - 1].sx, b.sy - F.bodies[j - 1].sy) > Math.max(30, 900 * s)) g.moveTo(b.sx, b.sy); else g.lineTo(b.sx, b.sy); } g.stroke(); g.setLineDash([]);
+      const r0 = Math.max(2.2, 130 * s);
+      for (const b of F.bodies) { const fm = FAM[b.fam] || FAM.drone; mark(fm.mark, b.sx, b.sy, r0 * fm.sz, fm.col); }
+      const [lx, ly] = P(F.cx, F.cy); if (!tiny() || on) label(F.key + ' · ' + F.name + (F.seated ? '' : ' · PLANNED'), lx, ly - Math.max(14, F.h * s / 2 + 12), on ? '#ffffff' : (F.seated ? '#7fe3ff' : '#ff9fe0'), on ? 13 : 12); if (big() || on) label(F.word, lx, ly - Math.max(14, F.h * s / 2 + 12) + 13, 'rgba(127,227,255,0.85)', 11);
+      for (const b of F.bodies) hit(b.sx, b.sy, Math.max(6, r0 * 1.6), { kind: 'plan', F: F });
+    }
+  }
+  // ---------- THE CARD ----------
+  const esc = (t) => String(t).replace(/[&<>]/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;' }[c]));
+  const where = (dx, alt) => 'ring ' + ringOf(dx, alt) + ' · dx ' + Math.round(dx) + ' · alt ' + Math.round(alt);
+  function cardOf(it) {
+    const k = it.kind;
+    if (k === 'station') return '<b>THE SCHMOOPY STATION</b>home; the Earth under it';
+    if (k === 'forge') { const pl = S.places.find((p) => p.dx === it.f.dx && p.alt === it.f.alt); let orbit = ''; if (it.runner && S.run) { const rr = Math.hypot(it.f.dx, it.f.alt - ALT0), ring = ringOf(it.f.dx, it.f.alt), dir = (S.run.DIR || [1])[ring - 1] || 1, lap = 2 * Math.PI * rr / S.run.CRUISE / 60; orbit = '<p><span class="k">A RUNAWAY (1842):</span> it flies this ring (r ' + Math.round(rr).toLocaleString() + ') ' + (dir > 0 ? 'clockwise' : 'counter-clockwise') + ' at ' + S.run.CRUISE + ' a second, a lap in ' + lap.toFixed(1) + ' min, never reversing; every landed hit adds ' + S.run.HIT_V + ' up to ' + S.run.V_MAX + ' and sways it; its guard flies with it.</p>'; } return '<b>' + it.f.key.toUpperCase() + ' · ' + (it.runner ? 'A RUNAWAY FORGE' : 'A FORGE') + (pl ? ' AT ' + esc(pl.name) : '') + '</b>' + where(it.f.dx, it.f.alt) + '<p>a schmoopy inside; its lab traxes guard it; it fights back within 3,200 and dispatches its own.</p>' + orbit; }
+    if (k === 'place') return '<b>' + esc(it.p.name) + '</b>' + where(it.p.dx, it.p.alt) + ' · ' + it.p.w + ' wide' + (it.p.hostile ? '<p>a hostile place (scenery since 1798)</p>' : '');
+    if (k === 'swarm') return '<b>' + esc(it.q.name) + ' · ' + esc(it.q.word) + '</b>' + where(it.q.dx, it.q.alt) + '<p>a cloud ' + C.SWARM_R + ' wide at its seat; it comes at you within ' + C.SWARM_AWARE.toLocaleString() + ' of the seat (the dashed ring) and pours the fight at ' + C.SWARM_REACH.toLocaleString() + '.</p>';
+    if (k === 'patrol') return '<b>' + esc(it.q.name) + '</b>' + where(it.q.dx, it.q.alt) + ' · lane ' + it.q.span.toLocaleString() + ' across<p>flies its lane; leaves it to hunt you within ' + C.PATROL_SEE.toLocaleString() + '.</p>';
+    if (k === 'rabbi') return '<b>' + it.r[0] + ' · A RABBI NEST · ' + it.r[3] + ' RABBIS' + (it.r[4] ? ' + ' + it.r[4] + ' GIANTS' : '') + '</b>' + where(it.r[1], it.r[2]) + '<p>seated within ' + C.SEAT_R + ' of its home (the disc). Loads at ' + C.LOAD.toLocaleString() + ', breaks at ' + C.ENGAGE.toLocaleString() + ', hunts you anywhere after.</p>';
+    if (k === 'cantor') return '<b>THE CANTOR · ' + it.c[2] + ' RABBIS + ' + it.c[3] + ' GIANTS + THE GREAT GIANT</b>' + where(it.c[0], it.c[1]) + '<p>a set piece: it dies once.</p>';
+    if (k === 'hunt') return '<b>' + it.h[0] + ' · THE HUNT · ' + it.h[3] + ' LIONS, ' + it.h[4] + ' GRUDGES</b>' + where(it.h[1], it.h[2]) + '<p>lions in a line 1,600 above the home, grudges in a ring of 900 around it; a set piece.</p>';
+    if (k === 'mine') return '<b>' + it.m[0] + ' · THE MINEFIELD · ' + it.m[3] + ' GRUDGES</b>' + where(it.m[1], it.m[2]) + '<p>a box 1,400 by 900; they hold their ground; a set piece.</p>';
+    if (k === 'field') return '<b>' + it.f[0] + ' · A GRUDGE FIELD · ' + it.f[3] + ' GRUDGES</b>' + where(it.f[1], it.f[2]) + '<p>a box 1,400 by 900, every tenth a behemoth; they hold their ground.</p>';
+    if (k === 'platf') return '<b>' + it.p[0] + ' · A PLATINUM FORMATION · ' + it.p[3] + '</b>' + where(it.p[1], it.p[2]) + '<p>a block ten across (1,800 wide), ' + Math.ceil(it.p[3] / 10) + ' rows; they break for you at ' + C.ENGAGE.toLocaleString() + '.</p>';
+    if (k === 'jackn') return '<b>' + it.j[0] + ' · A JACK NEST · ' + it.j[3] + ' JACK BOYS</b>' + where(it.j[1], it.j[2]) + '<p>on their sky floors 1,800 across; they jump for you.</p>';
+    if (k === 'shell') return '<b>THE SHELL AROUND ' + it.sh[0].toUpperCase() + ' · ' + it.sh[1] + ' PLATINUM SNIPERS</b>' + where(it.f.dx, it.f.alt) + '<p>a ring of 1,500 around the forge; it dies once.</p>';
+    if (k === 'den') return '<b>' + it.d.key + ' · A LAB DEN · ' + it.d.pop + ' LAB TRAXES</b>' + where(it.d.dx, it.d.alt) + '<p>' + (it.d.rs ? 'they come back ' + it.d.rs + ' s after a clear while their forge stands' : 'cleared for good once cleared') + '; they keep your speed.</p>';
+    if (k === 'pepper') return '<b>' + it.p[0] + ' · ' + it.p[4] + (it.p[3] === 'lion' ? ' LIONS · THEY POUNCE' : ' ROGUE MACHINES · THEY TURN ON YOU') + '</b>' + where(it.p[1], it.p[2]) + '<p>a small seated pack (the pepper, 1840): easy to knock out.</p>';
+    if (k === 'pack') return '<b>' + esc(it.p[1]) + ' · ' + it.p[6] + ' MACHINES</b>loop r ' + it.p[2].toLocaleString() + '–' + it.p[3].toLocaleString() + ', ' + it.p[4] + '°–' + it.p[5] + '°<p>a knot ' + (C.PACK_R * 2).toLocaleString() + ' wide riding the dashed loop at ' + C.PACK_V + ' px/s. It loads only within ' + C.LOAD.toLocaleString() + ' of the knot, not of the loop.</p>';
+    if (k === 'wing') return '<b>' + esc(it.w[1]) + ' · ' + it.w[5] + ' JETS</b>arc r ' + it.w[2].toLocaleString() + ', ' + it.w[3] + '°–' + it.w[4] + '° (' + Math.round(it.w[2] * (it.w[4] - it.w[3]) * D2R).toLocaleString() + ' long)<p>a V ' + (it.w[5] / 2 * 150).toLocaleString() + ' deep and ' + (it.w[5] * 60).toLocaleString() + ' tall riding the dashed arc back and forth at ' + C.WING_V + ' px/s. <span class="k">It loads only within ' + C.LOAD.toLocaleString() + ' of the V, not of the arc - the arc is its road, not its body.</span></p>';
+    if (k === 'convoy') return '<b>THE CONVOY · ' + it.c[3] + ' MACHINES + THE PRIZE</b>lane r ' + it.c[0].toLocaleString() + '–' + it.c[1].toLocaleString() + ' at ' + it.c[2] + '°<p>two columns riding the lane up and down at ' + C.CONVOY_V + ' px/s; the prize machine leads.</p>';
+    if (k === 'plan') { const F = it.F, P9 = (S.plan && S.plan.formations || []).find((q) => q.key === F.key) || {}; return '<div class="plan"><b>' + F.key + ' · ' + esc(F.name) + (F.seated ? ' · SEATED IN THE GAME' : ' · PLANNED, NOT YET IN THE GAME') + '</b>ring ' + F.ring + ' · ' + F.shape.toUpperCase() + ' · ' + F.n + ' bodies · ' + F.w.toLocaleString() + ' by ' + F.h.toLocaleString() + '<p>' + esc(F.word) + '</p>' + (P9.between ? '<p><span class="k">stands between</span> ' + esc(P9.between) + '</p>' : '') + (P9.note ? '<p>' + esc(P9.note) + '</p>' : '') + (F.seated ? '<p class="k">it stands as cells of up to ' + ((S.form9 && S.form9.CELL) || 28) + ' bodies: the cell you come near loads at ' + C.LOAD.toLocaleString() + ' and stands silent; it breaks only when you come within ' + ((S.form9 && S.form9.ENGAGE) || C.ENGAGE).toLocaleString() + '; ' + ((F.leash === undefined ? ((S.form9 && S.form9.LEASH) || 0) : F.leash) > 0 ? 'what it wakes follows you ' + (F.leash === undefined ? S.form9.LEASH : F.leash).toLocaleString() + ' and returns to its line (a fence)' : 'what it wakes hunts you anywhere') + '; the far cells hold their line.</p>' : '') + '<p class="k">rows: ' + F.rows.map((r) => r[1] + ' ' + r[0]).join(' / ') + (F.geo.mouth ? ' / mouth ' + F.geo.mouth[1] + ' ' + F.geo.mouth[0] : '') + '</p></div>'; }
+    return '';
+  }
+  function showCard(x, y, it) { card.innerHTML = cardOf(it); card.style.display = 'block'; const cw = card.offsetWidth, ch = card.offsetHeight; card.style.left = Math.min(W() - cw - 8, x + 16) + 'px'; card.style.top = Math.min(H() - ch - 8, Math.max(8, y - ch / 2)) + 'px'; }
+  function pick(x, y) { let best = null, bd = 1e9; for (const h of hits) { let d; if (h.seg) { const [x0, y0, x1, y1] = h.seg, L2 = (x1 - x0) * (x1 - x0) + (y1 - y0) * (y1 - y0), t = L2 ? Math.max(0, Math.min(1, ((x - x0) * (x1 - x0) + (y - y0) * (y1 - y0)) / L2)) : 0; d = Math.hypot(x - (x0 + (x1 - x0) * t), y - (y0 + (y1 - y0) * t)); } else d = Math.hypot(h.x - x, h.y - y); if (d <= h.r + 10 && d < bd) { bd = d; best = h.item; } } return best; }
+  // ---------- INPUT ----------
+  let drag = null, pinch = null;
+  cv.addEventListener('mousemove', (e) => { if (drag) { V.ox = drag.ox + (e.clientX - drag.x); V.oy = drag.oy + (e.clientY - drag.y); draw(); return; } const it = pick(e.clientX, e.clientY); V.hover = it; if (it) showCard(e.clientX, e.clientY, it); else if (!V.pin) card.style.display = 'none'; draw(); });
+  cv.addEventListener('mousedown', (e) => { drag = { x: e.clientX, y: e.clientY, ox: V.ox, oy: V.oy, moved: false }; cv.classList.add('drag'); });
+  addEventListener('mouseup', (e) => { if (drag && Math.hypot(e.clientX - drag.x, e.clientY - drag.y) < 4) { const it = pick(e.clientX, e.clientY); V.pin = it && it.kind === 'plan' ? it.F : null; listMark(); if (it) showCard(e.clientX, e.clientY, it); else card.style.display = 'none'; } drag = null; cv.classList.remove('drag'); draw(); });
+  cv.addEventListener('wheel', (e) => { e.preventDefault(); const f = Math.exp(-e.deltaY * 0.0012), s2 = Math.min(0.6, Math.max(0.003, V.s * f)), k = s2 / V.s; V.ox = e.clientX + (V.ox - e.clientX) * k; V.oy = e.clientY + (V.oy - e.clientY) * k; V.s = s2; draw(); }, { passive: false });
+  cv.addEventListener('touchstart', (e) => { if (e.touches.length === 1) drag = { x: e.touches[0].clientX, y: e.touches[0].clientY, ox: V.ox, oy: V.oy }; else if (e.touches.length === 2) { const a = e.touches[0], b = e.touches[1]; pinch = { d: Math.hypot(a.clientX - b.clientX, a.clientY - b.clientY), s: V.s, cx: (a.clientX + b.clientX) / 2, cy: (a.clientY + b.clientY) / 2, ox: V.ox, oy: V.oy }; drag = null; } }, { passive: true });
+  cv.addEventListener('touchmove', (e) => { e.preventDefault(); if (pinch && e.touches.length === 2) { const a = e.touches[0], b = e.touches[1], d = Math.hypot(a.clientX - b.clientX, a.clientY - b.clientY), s2 = Math.min(0.6, Math.max(0.003, pinch.s * d / pinch.d)), k = s2 / pinch.s, mx = (a.clientX + b.clientX) / 2, my = (a.clientY + b.clientY) / 2; V.s = s2; V.ox = mx + (pinch.ox - pinch.cx) * k; V.oy = my + (pinch.oy - pinch.cy) * k; draw(); } else if (drag && e.touches.length === 1) { V.ox = drag.ox + (e.touches[0].clientX - drag.x); V.oy = drag.oy + (e.touches[0].clientY - drag.y); draw(); } }, { passive: false });
+  cv.addEventListener('touchend', (e) => { if (e.touches.length === 0) { if (drag && e.changedTouches.length) { const t = e.changedTouches[0]; if (Math.hypot(t.clientX - drag.x, t.clientY - drag.y) < 6) { const it = pick(t.clientX, t.clientY); V.pin = it && it.kind === 'plan' ? it.F : null; listMark(); if (it) showCard(t.clientX, t.clientY, it); else card.style.display = 'none'; } } drag = null; pinch = null; } });
+  addEventListener('resize', resize);
+  // ---------- THE PANEL ----------
+  const el = (id) => document.getElementById(id);
+  el('title').textContent = 'THE SKY MAP · ' + (S.plan ? S.plan.title + ' · CUT ' + S.plan.cut : 'AS SEATED');
+  el('sub').textContent = S.version + ' · data ' + S.built + (S.plan ? ' · plan ' + S.plan.date : '') + ' · ' + S.forges.length + ' forges · ' + (S.nests.rabbi.length + 1 + S.nests.hunts.length + S.nests.plats.length + S.nests.jacks.length + S.nests.mines.length + S.nests.fields.length + S.nests.packs.length + S.nests.wings.length + 1 + S.nests.pepper.length + S.nests.shells.length) + ' seated nests · ' + S.swarms.length + ' great swarms · ' + S.patrols.length + ' patrols' + (PLAN.length ? ' · ' + PLAN.filter((F) => F.seated).length + ' formations seated in the game (' + PLAN.filter((F) => F.seated).reduce((a, F) => a + F.n, 0).toLocaleString() + ' bodies)' + (PLAN.some((F) => !F.seated) ? ' + ' + PLAN.filter((F) => !F.seated).length + ' planned' : '') : '');
+  const modes = [['now', 'AS SEATED NOW'], ['plan', 'THE PLAN (sky dimmed)'], ['both', 'BOTH']];
+  for (const [m, t] of modes) { const b = document.createElement('button'); b.textContent = t; b.className = V.mode === m ? 'on' : ''; b.onclick = () => { V.mode = m; for (const c of el('modes').children) c.className = c.textContent === t ? 'on' : ''; draw(); }; el('modes').appendChild(b); }
+  for (const [t, fn] of [['FIT', fit], ['+', () => { const k = 1.5; V.ox = W() / 2 + (V.ox - W() / 2) * k; V.oy = H() / 2 + (V.oy - H() / 2) * k; V.s *= k; draw(); }], ['−', () => { const k = 1 / 1.5; V.ox = W() / 2 + (V.ox - W() / 2) * k; V.oy = H() / 2 + (V.oy - H() / 2) * k; V.s *= k; draw(); }]]) { const b = document.createElement('button'); b.textContent = t; b.onclick = fn; el('zoom').appendChild(b); }
+  for (const [k, t, col] of LAYERS) { const l = document.createElement('label'); l.className = 'ck'; const i = document.createElement('input'); i.type = 'checkbox'; i.checked = V.layers[k]; i.onchange = () => { V.layers[k] = i.checked; draw(); }; const sw = document.createElement('span'); sw.className = 'sw'; sw.style.background = col; l.appendChild(i); l.appendChild(sw); l.appendChild(document.createTextNode(t)); el('layers').appendChild(l); }
+  function listMark() { for (const c of el('list').querySelectorAll('.f')) c.className = 'f' + (V.pin && c.dataset.key === V.pin.key ? ' on' : ''); }
+  if (PLAN.length) { const L = el('list'); const h2 = document.createElement('h2'); h2.textContent = 'THE FORMATIONS · click to fly there'; L.appendChild(h2); let ring = 0; for (const F of PLAN) { if (F.ring !== ring) { ring = F.ring; const r = document.createElement('div'); r.className = 'ring'; r.textContent = 'RING ' + ring + ' · ' + S.rings[ring - 1].name; L.appendChild(r); } const d = document.createElement('div'); d.className = 'f'; d.dataset.key = F.key; d.innerHTML = '<b' + (F.seated ? '' : ' style="color:#ff9fe0"') + '>' + F.key + '</b> ' + esc(F.name) + (F.seated ? '' : ' (planned)') + ' <span>' + F.n + '</span>'; d.onclick = () => { V.pin = F; listMark(); flyTo(F.cx, F.cy, 0.05); const [x, y] = P(F.cx, F.cy); showCard(x, y, { kind: 'plan', F: F }); }; L.appendChild(d); } }
+  el('fold').onclick = () => { el('panel').classList.toggle('folded'); V.userFold = true; };   /* the phone opens on the map (resize folds the panel); MENU unfolds it */
+  window.SKYMAP = { fit: fit, flyTo: flyTo, view: () => ({ s: V.s, ox: V.ox, oy: V.oy }), plan: PLAN, stats: () => { const t = {}; for (const F of PLAN) for (const b of F.bodies) t[b.fam] = (t[b.fam] || 0) + 1; return { formations: PLAN.length, bodies: PLAN.reduce((a, F) => a + F.n, 0), byFam: t, hits: hits.length }; } };
+  resize();
+})();
+</script>
+</body>
+</html>
